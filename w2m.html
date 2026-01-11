@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>우리 언제 만나? - 디버깅 모드</title>
+    
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        /* 스타일은 기존과 동일 */
+        :root { --primary-color: #4a90e2; --selected-color: #2ecc71; --overlap-color: #ff9f43; --bg-color: #f4f6f8; --box-border: #999; --box-bg: rgba(0, 0, 0, 0.1); --preview-bg: #e2e2e2; }
+        body { font-family: 'Apple SD Gothic Neo', sans-serif; display: flex; flex-direction: column; align-items: center; background-color: var(--bg-color); padding: 20px; user-select: none; }
+        #loginSection { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 80vh; width: 100%; }
+        .login-card { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; width: 300px; }
+        .login-input { width: 80%; padding: 10px; margin: 15px 0; border: 1px solid #ddd; border-radius: 5px; font-size: 16px; }
+        .start-btn { background-color: var(--primary-color); color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
+        #mainApp { display: none; flex-direction: column; align-items: center; width: 100%; }
+        .participants-list { margin-bottom: 15px; background: white; padding: 10px 15px; border-radius: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); font-size: 0.9rem; color: #555; max-width: 400px; text-align: center; line-height: 1.6; }
+        .my-name { font-weight: bold; color: var(--primary-color); }
+        .header-controls { display: flex; align-items: center; gap: 20px; margin-bottom: 20px; }
+        .nav-btn { background: white; border: 1px solid #ddd; padding: 5px 15px; border-radius: 5px; cursor: pointer; font-size: 18px; }
+        .calendar-container { position: relative; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); max-width: 400px; width: 100%; min-height: 350px; }
+        #selectionBox { position: absolute; background-color: var(--box-bg); border: 1px solid var(--box-border); display: none; pointer-events: none; z-index: 100; }
+        .calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+        .day-header { text-align: center; font-weight: bold; color: #666; padding-bottom: 10px; font-size: 14px; }
+        .day { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 50%; cursor: pointer; font-size: 14px; transition: 0.1s; }
+        .day.selected { background-color: var(--selected-color); color: white; }
+        .day.preview { background-color: var(--preview-bg); color: #333; }
+        .day.selected.preview { background-color: #e74c3c; color: white; opacity: 0.7; }
+        .day.empty { cursor: default; }
+        .result-area { margin-top: 20px; text-align: center; padding: 20px; background: white; border-radius: 10px; width: 100%; max-width: 400px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .overlap-date { display: inline-block; margin: 5px; padding: 5px 10px; background-color: var(--overlap-color); color: white; border-radius: 15px; font-weight: bold; font-size: 0.9em; }
+        .day-header:nth-child(1) { color: #e74c3c; } .day-header:nth-child(7) { color: #3498db; }
+        .share-section { margin-bottom: 20px; text-align: center; }
+        .share-btn { background-color: #333; color: white; border: none; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+    <div id="loginSection">
+        <div class="login-card">
+            <h2>👋 환영합니다!</h2>
+            <p>친구들과 일정을 조율해보세요.</p>
+            <input type="text" id="usernameInput" class="login-input" placeholder="본인 이름을 입력하세요" onkeyup="if(event.key==='Enter') app.login()">
+            <button class="start-btn" onclick="app.login()">시작하기</button>
+        </div>
+    </div>
+
+    <div id="mainApp">
+        <h1 style="font-size: 1.5rem; margin-top:0;">📅 우리 언제 만나?</h1>
+        <div class="share-section">
+            <button class="share-btn" onclick="app.copyLink()">🔗 친구 초대 링크 복사</button>
+            <div id="copyMessage" style="font-size: 12px; color: green; margin-top: 5px; display: none;">복사되었습니다!</div>
+        </div>
+        <div class="participants-list" id="participantsDisplay">참여자를 기다리는 중...</div>
+        <div class="header-controls">
+            <button class="nav-btn" onclick="app.changeMonth(-1)"> &lt; </button>
+            <h2 id="currentDateDisplay">로딩 중...</h2>
+            <button class="nav-btn" onclick="app.changeMonth(1)"> &gt; </button>
+        </div>
+        <div class="calendar-container" id="calendarContainer">
+            <div id="selectionBox"></div> 
+            <div class="calendar" id="calendar"></div>
+        </div>
+        <div class="result-area">
+            <h3>✨ 모두 가능한 날짜</h3>
+            <div id="resultDisplay">선택된 날짜가 없습니다.</div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 🔥 [필수] 여기에 Firebase 설정값을 다시 넣어주세요!
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyAZGONI2Uz7S3QeKpsnTNS_dScKhQhQ8Jc",
+            authDomain: "when-to-meet-3ed9d.firebaseapp.com",
+            projectId: "when-to-meet-3ed9d",
+            storageBucket: "when-to-meet-3ed9d.firebasestorage.app",
+            messagingSenderId: "1005399525520",
+            appId: "1:1005399525520:web:a43630353b989e47b9f015",
+            measurementId: "G-N162R410M2"
+            };
+        // ==========================================
+
+        try {
+            firebase.initializeApp(firebaseConfig);
+        } catch(e) {
+            alert("Firebase 설정 오류: apiKey 등을 제대로 입력했는지 확인해주세요!");
+        }
+        
+        const db = firebase.firestore(app, "when-to-meet-3ed9d");
+
+        const app = {
+            availability: {}, myId: null, viewDate: new Date(), roomId: null,
+            isMouseDown: false, isDragActive: false, startX: 0, startY: 0, mode: 'add',
+            
+            init: function() {
+                const params = new URLSearchParams(window.location.search);
+                this.roomId = params.get('room');
+                if (!this.roomId) {
+                    const newId = Math.random().toString(36).substring(2, 8);
+                    window.location.search = '?room=' + newId;
+                    return;
+                }
+                console.log("Room ID:", this.roomId);
+            },
+
+            login: function() {
+                const input = document.getElementById('usernameInput');
+                const name = input.value.trim();
+                if (!name) { alert("이름을 입력해주세요!"); return; }
+                this.myId = name;
+                document.getElementById('loginSection').style.display = 'none';
+                document.getElementById('mainApp').style.display = 'flex';
+                if (!this.availability[this.myId]) this.availability[this.myId] = new Set();
+                
+                this.connectToDB();
+                this.renderCalendar();
+                this.bindEvents();
+            },
+
+            // 🔥 [수정됨] 연결 에러를 화면에 띄워주는 기능 추가
+            connectToDB: function() {
+                db.collection('rooms').doc(this.roomId).onSnapshot((doc) => {
+                    if (doc.exists) {
+                        const data = doc.data();
+                        this.availability = {};
+                        for (const user in data) {
+                            this.availability[user] = new Set(data[user]);
+                        }
+                        if (!this.availability[this.myId]) this.availability[this.myId] = new Set();
+                    }
+                    this.updateParticipantsUI();
+                    this.renderCalendar();
+                }, (error) => {
+                    // 🔥 에러 발생 시 여기서 경고창이 뜹니다!
+                    console.error("DB Error:", error);
+                    alert("⚠️ 데이터베이스 연결 실패!\n\n오류 내용: " + error.message + "\n\n(Firebase 콘솔에서 '규칙'을 true로 바꿨는지 확인해보세요!)");
+                });
+            },
+
+            updateParticipantsUI: function() {
+                const users = Object.keys(this.availability);
+                const display = document.getElementById('participantsDisplay');
+                if (users.length === 0) { display.innerText = "아직 참여자가 없습니다."; return; }
+                const html = users.map(user => {
+                    if (user === this.myId) return `<span class="my-name">${user}(나)</span>`;
+                    return `<span>${user}</span>`;
+                }).join(', ');
+                display.innerHTML = `현재 참여자 (${users.length}명): ${html}`;
+            },
+
+            saveToFirebase: function() {
+                const myData = Array.from(this.availability[this.myId]);
+                const updateData = {};
+                updateData[this.myId] = myData;
+
+                db.collection('rooms').doc(this.roomId).set(updateData, { merge: true })
+                    .then(() => console.log("저장 성공"))
+                    .catch((error) => {
+                        console.error("저장 실패:", error);
+                        alert("저장 실패! 규칙(Rules) 설정을 확인하세요.");
+                    });
+            },
+
+            // (이하는 기존 로직 동일)
+            formatDateKey: function(y, m, d) {
+                const mm = String(m + 1).padStart(2, '0');
+                const dd = String(d).padStart(2, '0');
+                return y + '-' + mm + '-' + dd;
+            },
+            renderCalendar: function() {
+                const c = document.getElementById('calendar');
+                const d = document.getElementById('currentDateDisplay');
+                c.innerHTML = '';
+                const y = this.viewDate.getFullYear();
+                const m = this.viewDate.getMonth();
+                d.innerText = y + '년 ' + (m + 1) + '월';
+                ['일','월','화','수','목','금','토'].forEach(t => {
+                    const h = document.createElement('div'); h.className = 'day-header'; h.innerText = t; c.appendChild(h);
+                });
+                const f = new Date(y, m, 1).getDay();
+                const l = new Date(y, m + 1, 0).getDate();
+                for (let i = 0; i < f; i++) {
+                    const e = document.createElement('div'); e.className = 'day empty'; c.appendChild(e);
+                }
+                for (let i = 1; i <= l; i++) {
+                    const k = this.formatDateKey(y, m, i);
+                    const e = document.createElement('div'); e.className = 'day'; e.innerText = i; e.dataset.date = k;
+                    if (this.availability[this.myId] && this.availability[this.myId].has(k)) e.classList.add('selected');
+                    c.appendChild(e);
+                }
+                this.checkOverlap();
+            },
+            checkOverlap: function() {
+                const users = Object.keys(this.availability);
+                if (users.length === 0) return;
+                const sets = Object.values(this.availability);
+                const all = new Set();
+                sets.forEach(s => s.forEach(d => all.add(d)));
+                const o = [];
+                all.forEach(d => { if (sets.every(s => s.has(d))) o.push(d); });
+                o.sort();
+                const r = document.getElementById('resultDisplay');
+                if (o.length > 0) r.innerHTML = o.map(s => {
+                    const [, m, d] = s.split('-'); return `<span class="overlap-date">${parseInt(m)}월 ${parseInt(d)}일</span>`;
+                }).join(''); else r.innerText = "아직 모두 되는 날짜가 없습니다.";
+            },
+            bindEvents: function() {
+                const c = document.getElementById('calendarContainer');
+                const b = document.getElementById('selectionBox');
+                c.addEventListener('mousedown', (e) => {
+                    if(e.target.closest('.header-controls')) return;
+                    this.isMouseDown = true; this.isDragActive = false;
+                    const r = c.getBoundingClientRect();
+                    this.startX = e.clientX - r.left; this.startY = e.clientY - r.top;
+                    b.style.width = '0px'; b.style.height = '0px'; b.style.left = this.startX + 'px'; b.style.top = this.startY + 'px';
+                    const t = document.elementFromPoint(e.clientX, e.clientY);
+                    if(t && t.classList.contains('selected')) this.mode = 'remove'; else this.mode = 'add';
+                });
+                window.addEventListener('mousemove', (e) => {
+                    if (!this.isMouseDown) return;
+                    const r = c.getBoundingClientRect();
+                    const cx = e.clientX - r.left; const cy = e.clientY - r.top;
+                    const dist = Math.sqrt(Math.pow(cx - this.startX, 2) + Math.pow(cy - this.startY, 2));
+                    if (!this.isDragActive && dist > 5) { this.isDragActive = true; b.style.display = 'block'; }
+                    if (this.isDragActive) {
+                        const w = Math.abs(cx - this.startX); const h = Math.abs(cy - this.startY);
+                        const l = Math.min(cx, this.startX); const t = Math.min(cy, this.startY);
+                        b.style.width = w + 'px'; b.style.height = h + 'px'; b.style.left = l + 'px'; b.style.top = t + 'px';
+                        this.highlightOverlap(l, t, w, h);
+                    }
+                });
+                window.addEventListener('mouseup', (e) => {
+                    if (!this.isMouseDown) return;
+                    this.isMouseDown = false; let ch = false;
+                    if (this.isDragActive) {
+                        b.style.display = 'none'; this.applyBoxSelection(); ch = true;
+                        document.querySelectorAll('.day').forEach(el => el.classList.remove('preview'));
+                    } else {
+                        const t = document.elementFromPoint(e.clientX, e.clientY);
+                        if (t && t.classList.contains('day') && !t.classList.contains('empty')) {
+                            this.toggleDate(t.dataset.date, t); ch = true;
+                        }
+                    }
+                    this.isDragActive = false;
+                    if (ch) this.saveToFirebase();
+                });
+            },
+            toggleDate: function(k, e) {
+                const s = this.availability[this.myId];
+                if (s.has(k)) { s.delete(k); e.classList.remove('selected'); } else { s.add(k); e.classList.add('selected'); }
+                this.checkOverlap();
+            },
+            highlightOverlap: function(bx, by, bw, bh) {
+                const c = document.getElementById('calendarContainer'); const cr = c.getBoundingClientRect();
+                document.querySelectorAll('.day:not(.empty)').forEach(d => {
+                    const dr = d.getBoundingClientRect();
+                    const dl = dr.left - cr.left; const dt = dr.top - cr.top;
+                    const drr = dl + dr.width; const db = dt + dr.height;
+                    const br = bx + bw; const bb = by + bh;
+                    const o = !(drr < bx || dl > br || db < by || dt > bb);
+                    if (o) d.classList.add('preview'); else d.classList.remove('preview');
+                });
+            },
+            applyBoxSelection: function() {
+                const ps = document.querySelectorAll('.day.preview'); const s = this.availability[this.myId];
+                ps.forEach(d => {
+                    const k = d.dataset.date;
+                    if (this.mode === 'add') { s.add(k); d.classList.add('selected'); } else { s.delete(k); d.classList.remove('selected'); }
+                });
+                this.checkOverlap();
+            },
+            changeMonth: function(d) { this.viewDate.setMonth(this.viewDate.getMonth() + d); this.renderCalendar(); },
+            copyLink: function() {
+                navigator.clipboard.writeText(window.location.href).then(() => {
+                    const m = document.getElementById('copyMessage'); m.style.display = 'block'; setTimeout(() => m.style.display = 'none', 2000);
+                });
+            }
+        };
+        window.addEventListener('DOMContentLoaded', () => app.init());
+    </script>
+</body>
+</html>
