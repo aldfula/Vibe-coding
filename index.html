@@ -3,13 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>우리 언제 만나? - 디버깅 모드</title>
-    
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
-
+    <title>우리 언제 만나?</title>
     <style>
-        /* 스타일은 기존과 동일 */
+        /* 스타일은 기존과 100% 동일합니다 */
         :root { --primary-color: #4a90e2; --selected-color: #2ecc71; --overlap-color: #ff9f43; --bg-color: #f4f6f8; --box-border: #999; --box-bg: rgba(0, 0, 0, 0.1); --preview-bg: #e2e2e2; }
         body { font-family: 'Apple SD Gothic Neo', sans-serif; display: flex; flex-direction: column; align-items: center; background-color: var(--bg-color); padding: 20px; user-select: none; }
         #loginSection { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 80vh; width: 100%; }
@@ -70,9 +66,13 @@
         </div>
     </div>
 
-    <script>
+    <script type="module">
+        // 최신 Modular SDK 임포트
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+        import { getFirestore, doc, onSnapshot, setDoc, collection } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+
         // ==========================================
-        // 🔥 [필수] 여기에 Firebase 설정값을 다시 넣어주세요!
+        // 🔥 [필수] 여기에 Firebase 설정을 다시 넣어주세요!
         // ==========================================
         const firebaseConfig = {
             apiKey: "AIzaSyAZGONI2Uz7S3QeKpsnTNS_dScKhQhQ8Jc",
@@ -85,15 +85,14 @@
             };
         // ==========================================
 
-        try {
-            firebase.initializeApp(firebaseConfig);
-        } catch(e) {
-            alert("Firebase 설정 오류: apiKey 등을 제대로 입력했는지 확인해주세요!");
-        }
+        const firebaseApp = initializeApp(firebaseConfig);
         
-        const db = firebase.firestore(app, "when-to-meet-3ed9d");
+        // 👇👇 여기서 데이터베이스 이름을 지정합니다! 👇👇
+        // (default)가 아닌, 내가 만든 DB 이름을 여기에 넣습니다.
+        const db = getFirestore(firebaseApp, "when-to-meet-3ed9d");
 
-        const app = {
+        // 앱 로직 (전역 객체로 노출)
+        window.app = {
             availability: {}, myId: null, viewDate: new Date(), roomId: null,
             isMouseDown: false, isDragActive: false, startX: 0, startY: 0, mode: 'add',
             
@@ -122,11 +121,13 @@
                 this.bindEvents();
             },
 
-            // 🔥 [수정됨] 연결 에러를 화면에 띄워주는 기능 추가
             connectToDB: function() {
-                db.collection('rooms').doc(this.roomId).onSnapshot((doc) => {
-                    if (doc.exists) {
-                        const data = doc.data();
+                // Modular 문법으로 변경됨: doc(db, 컬렉션, 문서ID)
+                const docRef = doc(db, 'rooms', this.roomId);
+                
+                onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
                         this.availability = {};
                         for (const user in data) {
                             this.availability[user] = new Set(data[user]);
@@ -136,12 +137,22 @@
                     this.updateParticipantsUI();
                     this.renderCalendar();
                 }, (error) => {
-                    // 🔥 에러 발생 시 여기서 경고창이 뜹니다!
                     console.error("DB Error:", error);
-                    alert("⚠️ 데이터베이스 연결 실패!\n\n오류 내용: " + error.message + "\n\n(Firebase 콘솔에서 '규칙'을 true로 바꿨는지 확인해보세요!)");
+                    alert("⚠️ DB 연결 실패!\n" + error.message);
                 });
             },
 
+            saveToFirebase: function() {
+                const myData = Array.from(this.availability[this.myId]);
+                const updateData = {};
+                updateData[this.myId] = myData;
+
+                const docRef = doc(db, 'rooms', this.roomId);
+                setDoc(docRef, updateData, { merge: true })
+                    .catch((error) => console.error("저장 실패:", error));
+            },
+
+            // (UI 관련 로직은 동일)
             updateParticipantsUI: function() {
                 const users = Object.keys(this.availability);
                 const display = document.getElementById('participantsDisplay');
@@ -152,21 +163,6 @@
                 }).join(', ');
                 display.innerHTML = `현재 참여자 (${users.length}명): ${html}`;
             },
-
-            saveToFirebase: function() {
-                const myData = Array.from(this.availability[this.myId]);
-                const updateData = {};
-                updateData[this.myId] = myData;
-
-                db.collection('rooms').doc(this.roomId).set(updateData, { merge: true })
-                    .then(() => console.log("저장 성공"))
-                    .catch((error) => {
-                        console.error("저장 실패:", error);
-                        alert("저장 실패! 규칙(Rules) 설정을 확인하세요.");
-                    });
-            },
-
-            // (이하는 기존 로직 동일)
             formatDateKey: function(y, m, d) {
                 const mm = String(m + 1).padStart(2, '0');
                 const dd = String(d).padStart(2, '0');
@@ -281,7 +277,8 @@
                 });
             }
         };
-        window.addEventListener('DOMContentLoaded', () => app.init());
+
+        app.init();
     </script>
 </body>
 </html>
